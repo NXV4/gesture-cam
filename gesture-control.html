@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GESTURE//CAM</title>
+<style>
+  :root{
+    --cyan:#00f0ff; --mag:#ff2bd6; --lime:#b6ff00; --red:#ff2a3d; --bg:#05030a;
+    --mono: "Courier New", ui-monospace, monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--bg);color:var(--cyan);font-family:var(--mono);overflow:hidden}
+
+  /* ---------- stage ---------- */
+  #stage{
+    position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+    width:min(100vw,calc(100vh*16/9));aspect-ratio:16/9;
+    background:#000;overflow:hidden;
+    box-shadow:0 0 0 1px #00f0ff55,0 0 40px #00f0ff33,0 0 120px #ff2bd622;
+  }
+  #video{
+    position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+    transform:scaleX(-1);
+    filter:url(#chroma) contrast(1.25) saturate(1.5) brightness(.8) hue-rotate(-12deg) blur(.6px);
+  }
+  #overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;
+    filter:drop-shadow(0 0 6px var(--cyan)) drop-shadow(2px 0 0 #ff2bd677)}
+
+  /* camcorder texture layers */
+  .layer{position:absolute;inset:0;pointer-events:none}
+  #tint{background:linear-gradient(180deg,#ff2bd61f,#00f0ff1a);mix-blend-mode:color-dodge;opacity:.5}
+  #scan{background:repeating-linear-gradient(0deg,#0000 0 2px,#00000066 2px 3px);mix-blend-mode:multiply;opacity:.8}
+  #vignette{background:radial-gradient(ellipse at center,#0000 45%,#000000cc 100%)}
+  #noise{width:100%;height:100%;opacity:.12;mix-blend-mode:screen;image-rendering:pixelated}
+  #track{
+    top:auto;bottom:-14%;height:11%;
+    background:linear-gradient(180deg,#0000,#ffffff22 40%,#ffffff44 55%,#0000);
+    filter:blur(1px);mix-blend-mode:screen;animation:track 6.5s linear infinite;
+  }
+  @keyframes track{0%{transform:translateY(0);opacity:0}10%{opacity:1}90%{opacity:.9}100%{transform:translateY(-1100%);opacity:0}}
+  #flicker{background:#fff;opacity:0;animation:flick 7s steps(1) infinite;mix-blend-mode:overlay}
+  @keyframes flick{0%,92%,100%{opacity:0}93%{opacity:.12}94%{opacity:0}96%{opacity:.07}}
+
+  /* ---------- "filmed" HUD assets ---------- */
+  .cam{
+    /* assets look re-filmed: ghosted RGB, gaps in the lines, soft edges */
+    text-shadow:2px 0 0 #ff2bd6aa,-2px 0 0 #00f0ffaa,0 0 8px currentColor;
+    -webkit-mask-image:repeating-linear-gradient(0deg,#000 0 3px,#0006 3px 4px);
+            mask-image:repeating-linear-gradient(0deg,#000 0 3px,#0006 3px 4px);
+    filter:blur(.35px);
+    animation:jit 3.1s steps(1) infinite;
+  }
+  @keyframes jit{
+    0%,100%{transform:translate(0,0)}
+    7%{transform:translate(1px,0)}
+    8%{transform:translate(-2px,1px)}
+    9%{transform:translate(0,0)}
+    52%{transform:translate(0,-1px);opacity:.82}
+    53%{transform:translate(2px,0);opacity:1}
+  }
+  .hud{position:absolute;font-size:clamp(10px,1.7vw,22px);letter-spacing:.12em;text-transform:uppercase}
+  #rec{top:4%;left:3.5%;color:var(--red);display:flex;gap:.6em;align-items:center}
+  #rec i{width:.9em;height:.9em;border-radius:50%;background:var(--red);box-shadow:0 0 10px var(--red);animation:blink 1.1s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+  #tc{top:4%;left:50%;transform:translateX(-50%);color:#fff;font-size:clamp(11px,2vw,26px)}
+  #batt{top:4%;right:3.5%;color:var(--lime);display:flex;gap:.6em;align-items:center}
+  #batt b{display:inline-block;width:2.4em;height:1em;border:2px solid currentColor;position:relative;padding:1px}
+  #batt b::before{content:"";display:block;height:100%;width:62%;background:currentColor}
+  #batt b::after{content:"";position:absolute;right:-.45em;top:20%;height:60%;width:.25em;background:currentColor}
+  #mode{bottom:4%;left:3.5%;color:var(--cyan)}
+  #fmt{bottom:4%;right:3.5%;color:var(--mag);text-align:right}
+
+  /* corner brackets */
+  .br{position:absolute;width:6%;aspect-ratio:1;border:0 solid var(--cyan);opacity:.9}
+  .br.tl{top:2.5%;left:2%;border-width:3px 0 0 3px}
+  .br.tr{top:2.5%;right:2%;border-width:3px 3px 0 0}
+  .br.bl{bottom:2.5%;left:2%;border-width:0 0 3px 3px}
+  .br.brr{bottom:2.5%;right:2%;border-width:0 3px 3px 0}
+
+  /* gesture map */
+  #map{top:17%;left:3.5%;display:flex;flex-direction:column;gap:.5em;font-size:clamp(9px,1.35vw,18px)}
+  #map div{padding:.3em .8em;border-left:3px solid #00f0ff66;color:#00f0ffaa;transition:.1s}
+  #map div.on{color:#000;background:var(--lime);border-color:var(--lime);text-shadow:none;box-shadow:0 0 18px var(--lime)}
+  #map div.pend{color:var(--mag);border-color:var(--mag)}
+
+  /* log */
+  #log{top:17%;right:3.5%;text-align:right;font-size:clamp(8px,1.1vw,15px);color:#ffffffaa;line-height:1.6;max-width:30%}
+  #log span{color:var(--lime)}
+
+  /* big glitch word */
+  #word-wrap{position:absolute;left:0;right:0;bottom:14%;text-align:center}
+  #word{
+    position:relative;display:inline-block;font-weight:900;
+    font-size:clamp(34px,10vw,150px);letter-spacing:.08em;color:#fff;
+    text-shadow:0 0 12px var(--cyan),0 0 40px var(--cyan),0 0 90px var(--mag);
+  }
+  #word::before,#word::after{
+    content:attr(data-text);position:absolute;left:0;top:0;width:100%;
+    mix-blend-mode:screen;pointer-events:none;
+  }
+  #word::before{color:var(--mag);transform:translate(-4px,0);animation:g1 2.4s steps(1) infinite}
+  #word::after{color:var(--cyan);transform:translate(4px,0);animation:g2 2.1s steps(1) infinite}
+  @keyframes g1{
+    0%,100%{clip-path:inset(0 0 100% 0)}
+    10%{clip-path:inset(10% 0 60% 0)}15%{clip-path:inset(70% 0 5% 0)}
+    40%{clip-path:inset(0 0 100% 0)}62%{clip-path:inset(35% 0 40% 0)}66%{clip-path:inset(0 0 100% 0)}
+  }
+  @keyframes g2{
+    0%,100%{clip-path:inset(100% 0 0 0)}
+    12%{clip-path:inset(55% 0 20% 0)}18%{clip-path:inset(5% 0 80% 0)}
+    50%{clip-path:inset(100% 0 0 0)}78%{clip-path:inset(20% 0 55% 0)}82%{clip-path:inset(100% 0 0 0)}
+  }
+  #word.burst{animation:shake .35s steps(2) 1}
+  #word.burst::before,#word.burst::after{animation-duration:.25s}
+  @keyframes shake{
+    0%{transform:translate(0,0) skewX(0)}25%{transform:translate(-8px,3px) skewX(8deg)}
+    50%{transform:translate(6px,-2px) skewX(-6deg)}75%{transform:translate(-3px,1px) skewX(3deg)}100%{transform:none}
+  }
+  #word.dim{opacity:.35}
+
+  #bar{margin:1.2% auto 0;width:min(46%,520px);height:8px;border:1px solid var(--cyan);padding:1px}
+  #bar i{display:block;height:100%;width:0;background:var(--mag);box-shadow:0 0 12px var(--mag)}
+
+  /* ---------- boot screen ---------- */
+  #boot{
+    position:absolute;inset:0;z-index:50;background:#05030aee;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.4rem;text-align:center;padding:1.5rem;
+  }
+  #boot h1{
+    position:relative;font-size:clamp(28px,7vw,84px);letter-spacing:.14em;color:#fff;
+    text-shadow:0 0 14px var(--cyan),0 0 50px var(--mag);
+  }
+  #boot h1::before,#boot h1::after{content:attr(data-text);position:absolute;left:0;top:0;width:100%;mix-blend-mode:screen}
+  #boot h1::before{color:var(--mag);transform:translate(-4px,0);animation:g1 2.4s steps(1) infinite}
+  #boot h1::after{color:var(--cyan);transform:translate(4px,0);animation:g2 2.1s steps(1) infinite}
+  #boot p{max-width:34rem;color:#00f0ffbb;font-size:clamp(12px,1.6vw,16px);line-height:1.7}
+  #go{
+    font:inherit;font-size:clamp(14px,2vw,22px);letter-spacing:.2em;cursor:pointer;
+    color:var(--lime);background:transparent;border:2px solid var(--lime);padding:.9em 2em;
+    box-shadow:0 0 20px #b6ff0066,inset 0 0 20px #b6ff0033;text-shadow:0 0 10px var(--lime);
+  }
+  #go:hover{background:var(--lime);color:#000;text-shadow:none}
+  #go:disabled{opacity:.5;cursor:wait}
+  #status{color:var(--mag);min-height:1.4em;font-size:clamp(11px,1.5vw,15px)}
+  #flip{top:11%;right:3.5%;color:var(--mag);background:#0009;border:1px solid var(--mag);padding:.4em .8em;cursor:pointer;pointer-events:auto;z-index:5;font-family:inherit}
+  /* portrait phones: stage fills the screen */
+  @media (max-aspect-ratio:1/1){
+    #log{display:none}
+    .hud{font-size:2.8vw}
+    #tc{font-size:3.2vw}
+    #map{font-size:2.8vw;top:14%}
+    #flip{top:9%;font-size:2.8vw}
+    #word{font-size:15vw}
+    #word-wrap{bottom:12%}
+  }
+  .gone{display:none !important}
+  .hit{animation:hit .18s steps(2) 1}
+  @keyframes hit{0%{transform:translate(-50%,-50%) translateX(-6px)}50%{transform:translate(-50%,-50%) translateX(7px)}100%{transform:translate(-50%,-50%)}}
+</style>
+</head>
+<body>
+
+<!-- chromatic aberration filter (used on the video) -->
+<svg width="0" height="0" style="position:absolute">
+  <filter id="chroma" x="-2%" y="-2%" width="104%" height="104%" color-interpolation-filters="sRGB">
+    <feColorMatrix in="SourceGraphic" type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0" result="r"/>
+    <feOffset id="rOff" in="r" dx="4" dy="0" result="ro"/>
+    <feColorMatrix in="SourceGraphic" type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0" result="g"/>
+    <feColorMatrix in="SourceGraphic" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0" result="b"/>
+    <feOffset id="bOff" in="b" dx="-4" dy="0" result="bo"/>
+    <feBlend in="ro" in2="g" mode="screen" result="rg"/>
+    <feBlend in="rg" in2="bo" mode="screen"/>
+  </filter>
+</svg>
+
+<div id="stage">
+  <video id="video" playsinline muted></video>
+  <canvas id="overlay"></canvas>
+
+  <div class="layer" id="tint"></div>
+  <canvas class="layer" id="noise" width="160" height="90"></canvas>
+  <div class="layer" id="scan"></div>
+  <div class="layer" id="track"></div>
+  <div class="layer" id="flicker"></div>
+
+  <div class="br tl cam"></div><div class="br tr cam"></div>
+  <div class="br bl cam"></div><div class="br brr cam"></div>
+
+  <div class="hud cam" id="rec"><i></i>REC</div>
+  <div class="hud cam" id="tc">00:00:00:00</div>
+  <div class="hud cam" id="batt">BATT <b></b></div>
+  <div class="hud cam" id="mode">SP &nbsp;AF &nbsp;HAND-SCAN</div>
+  <div class="hud cam" id="fmt">NTSC // HI8 // <span id="fps">--</span>FPS</div>
+  <button class="hud cam" id="flip" type="button">FLIP CAM</button>
+
+  <div class="hud cam" id="map"></div>
+  <div class="hud cam" id="log"></div>
+
+  <div id="word-wrap" class="cam">
+    <div id="word" data-text="STANDBY">STANDBY</div>
+    <div id="bar"><i></i></div>
+  </div>
+
+  <div class="layer" id="vignette"></div>
+
+  <div id="boot">
+    <h1 data-text="GESTURE//CAM">GESTURE//CAM</h1>
+    <p>Hand-tracking control surface. Your browser will ask for camera access when you tap the button. Video never leaves your device — all processing runs locally in the browser.</p>
+    <button id="go">ENGAGE CAMERA</button>
+    <div id="status"></div>
+  </div>
+</div>
+
+<script type="module">
+import { HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+
+/* =====================================================================
+   CONFIG — edit this to change gestures / wire up real actions later
+   ===================================================================== */
+const GESTURES = {
+  OPEN:   { label: "OPEN HAND", word: "PAUSE" },
+  FOUR:   { label: "4 FINGERS", word: "MUTE"  },
+  THREE:  { label: "3 FINGERS", word: "SKIP"  },
+  TWO:    { label: "2 FINGERS", word: "CLOSE" },
+  ONE:    { label: "1 FINGER",  word: "OFF"   },
+};
+
+// Called once each time a gesture locks in. Swap these for real behaviour
+// (fetch() to a local helper, WebSocket message, etc).
+const ACTIONS = {
+  PAUSE: () => {}, MUTE: () => {}, SKIP: () => {}, CLOSE: () => {}, OFF: () => {},
+};
+
+const HOLD_MS   = 450;   // how long a gesture must be held before it fires
+const LOST_MS   = 700;   // how long with no hand before returning to STANDBY
+
+/* ===================================================================== */
+const $ = id => document.getElementById(id);
+const video = $("video"), overlay = $("overlay"), octx = overlay.getContext("2d");
+const wordEl = $("word"), barEl = $("bar").firstElementChild, statusEl = $("status");
+
+// gesture map + log UI
+const mapEl = $("map");
+mapEl.innerHTML = Object.entries(GESTURES)
+  .map(([k,g]) => `<div data-k="${k}">${g.label} &gt; ${g.word}</div>`).join("");
+const logEl = $("log"); const logLines = [];
+function log(msg){
+  logLines.push(msg); if (logLines.length > 5) logLines.shift();
+  logEl.innerHTML = logLines.map(l => `<div><span>&gt;</span> ${l}</div>`).join("");
+}
+
+function setWord(text, dim=false){
+  wordEl.textContent = text; wordEl.dataset.text = text;
+  wordEl.classList.toggle("dim", dim);
+}
+function burst(){
+  wordEl.classList.remove("burst"); void wordEl.offsetWidth; wordEl.classList.add("burst");
+  const s = $("stage"); s.classList.remove("hit"); void s.offsetWidth; s.classList.add("hit");
+}
+
+/* ---------- camcorder effects ---------- */
+const t0 = performance.now();
+const pad = n => String(n).padStart(2,"0");
+setInterval(() => {
+  const ms = performance.now() - t0, s = Math.floor(ms/1000);
+  $("tc").textContent = `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}:${pad(Math.floor((ms%1000)/1000*30))}`;
+}, 33);
+
+const nc = $("noise"), nctx = nc.getContext("2d"), nimg = nctx.createImageData(nc.width, nc.height);
+setInterval(() => {
+  const d = nimg.data;
+  for (let i = 0; i < d.length; i += 4){ const v = Math.random()*255; d[i]=d[i+1]=d[i+2]=v; d[i+3]=255; }
+  nctx.putImageData(nimg,0,0);
+}, 70);
+
+// random chroma-split spikes
+const rOff = $("rOff"), bOff = $("bOff");
+setInterval(() => {
+  const spike = Math.random() < .12;
+  const a = spike ? 8 + Math.random()*14 : 3 + Math.random()*2;
+  rOff.setAttribute("dx", a); bOff.setAttribute("dx", -a);
+  if (spike) rOff.setAttribute("dy", (Math.random()*6-3));
+  else rOff.setAttribute("dy", 0);
+}, 120);
+
+/* ---------- gesture classification ---------- */
+const d2 = (a,b,asp) => Math.hypot((a.x-b.x)*asp, a.y-b.y);
+
+function classify(lm, asp){
+  const w = lm[0];
+  const ext = (tip, pip) => d2(lm[tip], w, asp) > d2(lm[pip], w, asp) * 1.08;
+  const fingers = [ext(8,6), ext(12,10), ext(16,14), ext(20,18)];
+  const n = fingers.filter(Boolean).length;
+  const thumb = d2(lm[4], lm[17], asp) > d2(lm[3], lm[17], asp) * 1.05;
+  if (n === 4) return thumb ? "OPEN" : "FOUR";
+  if (n === 3) return "THREE";
+  if (n === 2) return "TWO";
+  if (n === 1) return "ONE";
+  return null; // fist / unknown
+}
+
+/* ---------- state machine ---------- */
+let cand = null, candSince = 0, locked = null, lastSeen = 0;
+
+function highlight(lockedKey, pendKey){
+  for (const el of mapEl.children){
+    el.classList.toggle("on", el.dataset.k === lockedKey);
+    el.classList.toggle("pend", el.dataset.k === pendKey && el.dataset.k !== lockedKey);
+  }
+}
+
+function update(g, now){
+  if (g) lastSeen = now;
+  if (!g){
+    cand = null; barEl.style.width = "0";
+    if (now - lastSeen > LOST_MS && locked !== null){
+      locked = null; setWord("STANDBY", true); highlight(null,null);
+    }
+    return;
+  }
+  if (g !== cand){ cand = g; candSince = now; }
+  const p = Math.min(1, (now - candSince) / HOLD_MS);
+  barEl.style.width = (p*100) + "%";
+  if (g === locked){ highlight(locked, null); return; }
+  highlight(locked, g);
+  if (p >= 1){
+    locked = g;
+    const word = GESTURES[g].word;
+    setWord(word); burst(); highlight(g, null);
+    log(`${GESTURES[g].label} // ${word}`);
+    try { ACTIONS[word]?.(); } catch(e){ console.error(e); }
+    window.dispatchEvent(new CustomEvent("gesture", { detail: { gesture: g, action: word } }));
+  }
+}
+
+/* ---------- drawing the hand ---------- */
+const CONN = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
+              [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+function drawHand(lm){
+  const W = overlay.width, H = overlay.height;
+  octx.clearRect(0,0,W,H);
+  if (!lm) return;
+  const jx = Math.random() < .06 ? (Math.random()*16-8) : 0; // occasional tracking tear
+  const X = p => (mirrored ? 1 - p.x : p.x) * W + jx, Y = p => p.y * H;
+  octx.lineWidth = Math.max(2, W/420); octx.lineCap = "round";
+  octx.strokeStyle = "#00f0ff"; octx.setLineDash([W/90, W/300]); // dashed = "scanned"
+  octx.beginPath();
+  for (const [a,b] of CONN){ octx.moveTo(X(lm[a]),Y(lm[a])); octx.lineTo(X(lm[b]),Y(lm[b])); }
+  octx.stroke(); octx.setLineDash([]);
+  for (let i = 0; i < lm.length; i++){
+    const tip = [4,8,12,16,20].includes(i);
+    octx.fillStyle = tip ? "#b6ff00" : "#ff2bd6";
+    const r = tip ? W/150 : W/260;
+    octx.fillRect(X(lm[i])-r, Y(lm[i])-r, r*2, r*2);
+  }
+  // bounding box with corner ticks
+  let minx=1,miny=1,maxx=0,maxy=0;
+  for (const p of lm){ minx=Math.min(minx,p.x);maxx=Math.max(maxx,p.x);miny=Math.min(miny,p.y);maxy=Math.max(maxy,p.y); }
+  const bx = (mirrored ? 1-maxx : minx)*W-12, by = miny*H-12, bw = (maxx-minx)*W+24, bh = (maxy-miny)*H+24, t = Math.min(bw,bh)*.18;
+  octx.strokeStyle = "#b6ff00"; octx.lineWidth = Math.max(2,W/500);
+  octx.beginPath();
+  octx.moveTo(bx,by+t);octx.lineTo(bx,by);octx.lineTo(bx+t,by);
+  octx.moveTo(bx+bw-t,by);octx.lineTo(bx+bw,by);octx.lineTo(bx+bw,by+t);
+  octx.moveTo(bx+bw,by+bh-t);octx.lineTo(bx+bw,by+bh);octx.lineTo(bx+bw-t,by+bh);
+  octx.moveTo(bx+t,by+bh);octx.lineTo(bx,by+bh);octx.lineTo(bx,by+bh-t);
+  octx.stroke();
+}
+
+/* ---------- boot ---------- */
+let landmarker, lastVideoTime = -1, frames = 0, fpsT = performance.now();
+
+async function start(){
+  const btn = $("go"); btn.disabled = true;
+  try {
+    if (!navigator.mediaDevices?.getUserMedia) throw Object.assign(new Error("insecure"), { name: "InsecureContext" });
+    statusEl.textContent = "REQUESTING CAMERA ACCESS...";
+    await openCamera();            // browser permission prompt appears here
+    statusEl.textContent = "LOADING NEURAL MODEL...";
+    const fileset = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+    const opts = delegate => ({
+      baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+        delegate
+      },
+      runningMode: "VIDEO", numHands: 1,
+      minHandDetectionConfidence: .6, minHandPresenceConfidence: .6, minTrackingConfidence: .5
+    });
+    try { landmarker = await HandLandmarker.createFromOptions(fileset, opts("GPU")); }
+    catch { landmarker = await HandLandmarker.createFromOptions(fileset, opts("CPU")); }
+
+    $("boot").classList.add("gone");
+    setWord("STANDBY", true);
+    log("CAM ONLINE"); log("SHOW HAND TO LENS");
+    requestAnimationFrame(loop);
+  } catch (e){
+    console.error(e);
+    const blocked = "CAMERA BLOCKED // allow camera in your browser's site settings, then reload";
+    const msgs = {
+      NotAllowedError: blocked, PermissionDeniedError: blocked,
+      NotFoundError: "NO CAMERA FOUND ON THIS DEVICE",
+      NotReadableError: "CAMERA IN USE BY ANOTHER APP // close it and retry",
+      InsecureContext: "NEEDS HTTPS // open this page from a https:// address"
+    };
+    statusEl.textContent = msgs[e.name] || ("ERROR: " + (e.message || e));
+    btn.disabled = false;
+  }
+}
+
+let facing = "user", mirrored = true;
+async function openCamera(){
+  if (video.srcObject) video.srcObject.getTracks().forEach(t => t.stop());
+  const portrait = innerHeight > innerWidth;
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: { ideal: facing }, width: { ideal: portrait ? 720 : 1280 }, height: { ideal: portrait ? 1280 : 720 } },
+    audio: false
+  });
+  video.srcObject = stream; await video.play();
+  const fm = stream.getVideoTracks()[0].getSettings().facingMode;
+  mirrored = fm ? fm !== "environment" : facing === "user";
+  video.style.transform = mirrored ? "scaleX(-1)" : "none";
+  const vw = video.videoWidth, vh = video.videoHeight, ar = vw / vh;
+  overlay.width = vw; overlay.height = vh;
+  const st = $("stage");
+  st.style.aspectRatio = ar;
+  st.style.width = `min(100vw, calc(100dvh * ${ar}))`;
+  lastVideoTime = -1;
+}
+$("flip").addEventListener("click", async () => {
+  const prev = facing;
+  facing = facing === "user" ? "environment" : "user";
+  try { await openCamera(); log("CAM " + (facing === "user" ? "FRONT" : "REAR")); }
+  catch { facing = prev; try { await openCamera(); } catch {} log("FLIP FAILED"); }
+});
+
+function loop(){
+  const now = performance.now();
+  if (video.readyState >= 2 && video.currentTime !== lastVideoTime){
+    lastVideoTime = video.currentTime;
+    const res = landmarker.detectForVideo(video, now);
+    const lm = res.landmarks && res.landmarks[0];
+    drawHand(lm);
+    const asp = (video.videoWidth || 16) / (video.videoHeight || 9);
+    update(lm ? classify(lm, asp) : null, now);
+    frames++;
+  }
+  if (now - fpsT > 1000){ $("fps").textContent = frames; frames = 0; fpsT = now; }
+  requestAnimationFrame(loop);
+}
+
+$("go").addEventListener("click", start);
+</script>
+</body>
+</html>
